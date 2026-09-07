@@ -3,6 +3,7 @@ import session from "express-session";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import { put, list, del } from "@vercel/blob";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -18,8 +19,6 @@ app.use(session({
   saveUninitialized: false,
   cookie: { httpOnly: true, sameSite: "lax", secure: false, maxAge: 1000 * 60 * 60 * 8 }
 }));
-
-import { put, list, del } from "@vercel/blob";
 
 async function readBlasts() {
   const { blobs } = await list({ prefix: "blasts/" });
