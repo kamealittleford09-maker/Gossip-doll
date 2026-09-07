@@ -19,14 +19,42 @@ app.use(session({
   cookie: { httpOnly: true, sameSite: "lax", secure: false, maxAge: 1000 * 60 * 60 * 8 }
 }));
 
-const dataFile = path.join(__dirname, "data", "blasts.json");
-fs.mkdirSync(path.dirname(dataFile), { recursive: true });
-if (!fs.existsSync(dataFile)) fs.writeFileSync(dataFile, "[]");
+import { put, list, del } from "@vercel/blob";
 
-function readBlasts() {
-  return JSON.parse(fs.readFileSync(dataFile, "utf8"));
+async function readBlasts() {
+  const { blobs } = await list({ prefix: "blasts/" });
+
+  const blasts = await Promise.all(
+    blobs.map(async (blob) => {
+      const response = await fetch(blob.url);
+      return response.json();
+    })
+  );
+
+  return blasts.sort(
+    (a, b) => new Date(b.date) - new Date(a.date)
+  );
 }
-function writeBlasts(blasts) {
+
+async function writeBlast(blast) {
+  await put(
+    `blasts/${blast.id}.json`,
+    JSON.stringify(blast),
+    {
+      access: "public",
+      addRandomSuffix: false,
+      contentType: "application/json"
+    }
+  );
+}
+
+async function deleteBlast(id) {
+  const { blobs } = await list({ prefix: `blasts/${id}.json` });
+
+  for (const blob of blobs) {
+    await del(blob.url);
+  }
+}
   fs.writeFileSync(dataFile, JSON.stringify(blasts, null, 2));
 }
 function requireAdmin(req, res, next) {
@@ -35,7 +63,14 @@ function requireAdmin(req, res, next) {
 }
 
 app.get("/api/config", (_req, res) => res.json({ tipEmail: ADMIN_EMAIL }));
-app.get("/api/blasts", (_req, res) => res.json(readBlasts()));
+app.get("/api/blasts", async (_req, res) => {
+  try {
+    res.json(await readBlasts());
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Could not load blasts" });
+  }
+});
 
 app.post("/api/login", (req, res) => {
   const { email, password } = req.body || {};
@@ -52,7 +87,34 @@ app.post("/api/logout", (req, res) => {
 
 app.get("/api/me", (req, res) => res.json({ admin: !!req.session?.admin }));
 
-app.post("/api/blasts", requireAdmin, (req, res) => {
+app.post("/api/blasts", requireAdmin, async (req, res) => {
+  try {
+    const { title, body, category } = req.body || {};
+
+    if (!title?.trim() || !body?.trim()) {
+      return res.status(400).json({
+        error: "Title and blast text are required"
+      });
+    }
+
+    const blast = {
+      id: Date.now().toString(),
+      title: title.trim(),
+      body: body.trim(),
+      category: (category || "Gossip").trim(),
+      date: new Date().toISOString()
+    };
+
+    await writeBlast(blast);
+
+    res.json(blast);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      error: "Could not publish blast"
+    });
+  }
+});
   const { title, body, category } = req.body || {};
   if (!title?.trim() || !body?.trim()) return res.status(400).json({ error: "Title and blast are required." });
 
@@ -69,7 +131,17 @@ app.post("/api/blasts", requireAdmin, (req, res) => {
   res.json(blast);
 });
 
-app.delete("/api/blasts/:id", requireAdmin, (req, res) => {
+app.delete("/api/blasts/:id", requireAdmin, async (req, res) => {
+  try {
+    await deleteBlast(req.params.id);
+    res.json({ ok: true });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      error: "Could not delete blast"
+    });
+  }
+});
   const blasts = readBlasts().filter(b => b.id !== req.params.id);
   writeBlasts(blasts);
   res.json({ ok: true });
